@@ -56,9 +56,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check environment config files
+      - name: Resolve and check environment config files
         run: |
-          for f in "environments/${ENVIRONMENT}.tfvars" "environments/${ENVIRONMENT}.backend.hcl"; do
+          ENV_FILE=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+          echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
+          for f in "environments/${ENV_FILE}.tfvars" "environments/${ENV_FILE}.backend.hcl"; do
             if [ ! -f "$f" ]; then
               echo "::error::Missing $f"
               exit 1
