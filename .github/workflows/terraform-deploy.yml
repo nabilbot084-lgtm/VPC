@@ -23,7 +23,6 @@ on:
         type: string
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -41,6 +40,8 @@ jobs:
     env:
       ENVIRONMENT: ${{ inputs.environment }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
 
     steps:
       - name: Guard destroy
@@ -84,14 +85,14 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
-        run: terraform init -backend-config="environments/${ENVIRONMENT}.backend.hcl"
+        run: terraform init -backend-config="environments/${ENV_FILE}.backend.hcl"
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
         if: ${{ inputs.action == 'apply' }}
-        run: terraform plan -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfplan
+        run: terraform plan -var-file="environments/${ENV_FILE}.tfvars" -out=tfplan
 
       - name: Terraform Apply
         if: ${{ inputs.action == 'apply' }}
@@ -99,7 +100,7 @@ jobs:
 
       - name: Terraform Destroy Plan
         if: ${{ inputs.action == 'destroy' }}
-        run: terraform plan -destroy -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfdestroy
+        run: terraform plan -destroy -var-file="environments/${ENV_FILE}.tfvars" -out=tfdestroy
 
       - name: Terraform Destroy
         if: ${{ inputs.action == 'destroy' }}
