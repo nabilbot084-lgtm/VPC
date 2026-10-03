@@ -22,35 +22,48 @@ on:
         required: false
         type: string
 
-  push:
-    branches:
-      - "test**"
-    paths-ignore:
-      - "**.md"
-
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ inputs.environment || 'test' }}
+  group: terraform-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   terraform:
-    name: Terraform ${{ inputs.action || 'apply' }} - ${{ inputs.environment || 'test' }}
+    name: Terraform ${{ inputs.action }} - ${{ inputs.environment }}
     runs-on: ubuntu-latest
 
     environment:
-      name: ${{ inputs.environment || 'test' }}
+      name: ${{ inputs.environment }}
 
     env:
-      ENVIRONMENT: ${{ inputs.environment || 'test' }}
-      ACTION: ${{ inputs.action || 'apply' }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      ACTION: ${{ inputs.action }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
 
     steps:
+      - name: Guard environment and branch mapping
+        run: |
+          ENV_FILE=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+          echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
+
+          case "$ENV_FILE" in
+            dev)  EXPECTED_BRANCH="dev-main" ;;
+            test) EXPECTED_BRANCH="test-main" ;;
+            *)
+              echo "::error::Unsupported environment '$ENVIRONMENT'"
+              exit 1
+              ;;
+          esac
+
+          if [ "$GITHUB_REF_NAME" != "$EXPECTED_BRANCH" ]; then
+            echo "::error::Environment '$ENVIRONMENT' can only be deployed from branch '$EXPECTED_BRANCH' (running on '$GITHUB_REF_NAME')"
+            exit 1
+          fi
+
       - name: Guard destroy
         if: ${{ env.ACTION == 'destroy' }}
         env:
@@ -64,29 +77,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Resolve environment, guard branch, check config files
+      - name: Check environment config files
         run: |
-          ENV_FILE=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
-          echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
-
-          case "$ENV_FILE" in
-            dev)
-              if [ "$GITHUB_REF_NAME" != "main" ]; then
-                echo "::error::dev can only be deployed from main (running on $GITHUB_REF_NAME)"
-                exit 1
-              fi
-              ;;
-            test)
-              case "$GITHUB_REF_NAME" in
-                main|test*) ;;
-                *)
-                  echo "::error::test can only be deployed from main or test* branches (running on $GITHUB_REF_NAME)"
-                  exit 1
-                  ;;
-              esac
-              ;;
-          esac
-
           for f in "environments/${ENV_FILE}.tfvars" "environments/${ENV_FILE}.backend.hcl"; do
             if [ ! -f "$f" ]; then
               echo "::error::Missing $f"
