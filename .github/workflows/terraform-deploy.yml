@@ -1,4 +1,4 @@
-name: Terraform Manual Deployment
+name: Terraform Deployment
 
 on:
   workflow_dispatch:
@@ -22,30 +22,37 @@ on:
         required: false
         type: string
 
+  push:
+    branches:
+      - "test**"
+    paths-ignore:
+      - "**.md"
+
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ inputs.environment }}
+  group: terraform-${{ inputs.environment || 'test' }}
   cancel-in-progress: false
 
 jobs:
   terraform:
-    name: Terraform ${{ inputs.action }} - ${{ inputs.environment }}
+    name: Terraform ${{ inputs.action || 'apply' }} - ${{ inputs.environment || 'test' }}
     runs-on: ubuntu-latest
 
     environment:
-      name: ${{ inputs.environment }}
+      name: ${{ inputs.environment || 'test' }}
 
     env:
-      ENVIRONMENT: ${{ inputs.environment }}
-      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      ENVIRONMENT: ${{ inputs.environment || 'test' }}
+      ACTION: ${{ inputs.action || 'apply' }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
 
     steps:
       - name: Guard destroy
-        if: ${{ inputs.action == 'destroy' }}
+        if: ${{ env.ACTION == 'destroy' }}
         env:
           CONFIRM: ${{ inputs.confirm_destroy }}
         run: |
@@ -57,10 +64,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Resolve and check environment config files
+      - name: Resolve environment, guard branch, check config files
         run: |
           ENV_FILE=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
           echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
+
+          case "$ENV_FILE" in
+            dev)
+              if [ "$GITHUB_REF_NAME" != "main" ]; then
+                echo "::error::dev can only be deployed from main (running on $GITHUB_REF_NAME)"
+                exit 1
+              fi
+              ;;
+            test)
+              case "$GITHUB_REF_NAME" in
+                main|test*) ;;
+                *)
+                  echo "::error::test can only be deployed from main or test* branches (running on $GITHUB_REF_NAME)"
+                  exit 1
+                  ;;
+              esac
+              ;;
+          esac
+
           for f in "environments/${ENV_FILE}.tfvars" "environments/${ENV_FILE}.backend.hcl"; do
             if [ ! -f "$f" ]; then
               echo "::error::Missing $f"
@@ -73,7 +99,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
 
       - name: Verify AWS identity
         run: aws sts get-caller-identity
@@ -91,17 +117,17 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan
-        if: ${{ inputs.action == 'apply' }}
+        if: ${{ env.ACTION == 'apply' }}
         run: terraform plan -var-file="environments/${ENV_FILE}.tfvars" -out=tfplan
 
       - name: Terraform Apply
-        if: ${{ inputs.action == 'apply' }}
+        if: ${{ env.ACTION == 'apply' }}
         run: terraform apply -auto-approve tfplan
 
       - name: Terraform Destroy Plan
-        if: ${{ inputs.action == 'destroy' }}
+        if: ${{ env.ACTION == 'destroy' }}
         run: terraform plan -destroy -var-file="environments/${ENV_FILE}.tfvars" -out=tfdestroy
 
       - name: Terraform Destroy
-        if: ${{ inputs.action == 'destroy' }}
+        if: ${{ env.ACTION == 'destroy' }}
         run: terraform apply -auto-approve tfdestroy
