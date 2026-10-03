@@ -17,6 +17,11 @@ on:
           - apply
           - destroy
 
+      confirm_destroy:
+        description: "For destroy only: type the environment name to confirm"
+        required: false
+        type: string
+
 permissions:
   id-token: write
   contents: read
@@ -30,15 +35,35 @@ jobs:
     name: Terraform ${{ inputs.action }} - ${{ inputs.environment }}
     runs-on: ubuntu-latest
 
-    # This is important:
-    # The selected GitHub Environment controls environment-level
-    # variables, secrets and deployment protection rules.
     environment:
       name: ${{ inputs.environment }}
 
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+
     steps:
+      - name: Guard destroy
+        if: ${{ inputs.action == 'destroy' }}
+        env:
+          CONFIRM: ${{ inputs.confirm_destroy }}
+        run: |
+          if [ "$CONFIRM" != "$ENVIRONMENT" ]; then
+            echo "::error::Destroy blocked. Set 'confirm_destroy' to '$ENVIRONMENT' to proceed."
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Check environment config files
+        run: |
+          for f in "environments/${ENVIRONMENT}.tfvars" "environments/${ENVIRONMENT}.backend.hcl"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing $f"
+              exit 1
+            fi
+          done
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -56,17 +81,14 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -backend-config="environments/${ENVIRONMENT}.backend.hcl"
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
         if: ${{ inputs.action == 'apply' }}
-        run: |
-          terraform plan \
-            -var-file="environments/${{ inputs.environment }}.tfvars" \
-            -out=tfplan
+        run: terraform plan -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfplan
 
       - name: Terraform Apply
         if: ${{ inputs.action == 'apply' }}
@@ -74,11 +96,7 @@ jobs:
 
       - name: Terraform Destroy Plan
         if: ${{ inputs.action == 'destroy' }}
-        run: |
-          terraform plan \
-            -destroy \
-            -var-file="environments/${{ inputs.environment }}.tfvars" \
-            -out=tfdestroy
+        run: terraform plan -destroy -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfdestroy
 
       - name: Terraform Destroy
         if: ${{ inputs.action == 'destroy' }}
